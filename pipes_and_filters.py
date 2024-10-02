@@ -6,8 +6,8 @@ from typing import Optional
 
 
 class AbstractFilter(ABC):
-    def __init__(self, input_queue: queue.Queue, output_queue: queue.Queue) -> None:
-        self.input_queue = input_queue
+    def __init__(self, output_queue: queue.Queue) -> None:
+        self.input_queue = queue.Queue()
         self.output_queue = output_queue
         self.worker_thread = threading.Thread(target=self.__worker, daemon=True)
 
@@ -16,7 +16,7 @@ class AbstractFilter(ABC):
         pass
 
     def __worker(self) -> None:
-        frame_counter = 0  # Counter to track frame number
+        frame_counter = 0
         while True:
             try:
                 frame = self.input_queue.get()
@@ -60,8 +60,8 @@ class MirrorFilter(AbstractFilter):
 
 # Filter 3: Resize Effect
 class ResizeFilter(AbstractFilter):
-    def __init__(self, input_queue, output_queue, scale):
-        super().__init__(input_queue, output_queue)
+    def __init__(self, output_queue, scale):
+        super().__init__(output_queue)
         self.scale = scale
 
     def _process(self, frame):
@@ -93,7 +93,7 @@ class GaussianBlurFilter(AbstractFilter):
         return cv2.GaussianBlur(frame, self._gaussian_kernel, self._sigma)
 
 
-def capture_video_from_webcam(input_queue):
+def capture_video_from_webcam(output_queue):
     try:
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
@@ -102,18 +102,18 @@ def capture_video_from_webcam(input_queue):
         while True:
             ret, frame = cap.read()
             if not ret:
-                input_queue.put(None)
+                output_queue.put(None)
                 break
-            input_queue.put(frame)
+            output_queue.put(frame)
 
         cap.release()
 
     except Exception as e:
         print("failed to capture video from web camera, error:", e)
-        input_queue.put(None)
+        output_queue.put(None)
 
 
-def read_video_from_file(input_queue):
+def read_video_from_file(output_queue):
     # put here path to your local video in the same format
     try:
         cap = cv2.VideoCapture(
@@ -123,15 +123,15 @@ def read_video_from_file(input_queue):
         while True:
             ret, frame = cap.read()
             if not ret:
-                input_queue.put(None)
+                output_queue.put(None)
                 break
-            input_queue.put(frame)
+            output_queue.put(frame)
 
         cap.release()
 
     except Exception as e:
         print("failed to get video from file, error:", e)
-        input_queue.put(None)
+        output_queue.put(None)
 
 
 def display_video(input_queue, window_name):
@@ -170,14 +170,17 @@ def main():
 
     # Capturing and displaying the video runs on threads
     capture_thread = threading.Thread(target=capture_video_from_webcam, args=(source_queue,))
+    # capture_thread = threading.Thread(target=read_video_from_file, args=(source_queue,))
     display_original_thread = threading.Thread(target=display_video, args=(source_queue, "Original Video"))
     display_processed_thread = threading.Thread(target=display_video, args=(sink_queue, "Processed Video"))
 
     # Filters (each running in its own thread)
-    resize_filter = ResizeFilter(input_queue=source_queue, output_queue=resize_output_queue, scale=0.5)
-    mirror_filter = MirrorFilter(input_queue=resize_output_queue, output_queue=mirror_output_queue)
-    bnw_filter = BlackAndWhiteFilter(input_queue=mirror_output_queue, output_queue=bnw_output_queue)
-    invert_filter = InvertColorFilter(input_queue=bnw_output_queue, output_queue=sink_queue)
+    invert_filter = InvertColorFilter(output_queue=sink_queue)
+    bnw_filter = BlackAndWhiteFilter(output_queue=invert_filter.input_queue)
+    mirror_filter = MirrorFilter(output_queue=bnw_filter.input_queue)
+    resize_filter = ResizeFilter(output_queue=mirror_filter.input_queue, scale=0.5)
+
+    resize_filter.input_queue = source_queue
 
     # Start all threads (video and filters related ones)
     capture_thread.start()
